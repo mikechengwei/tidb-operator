@@ -410,6 +410,45 @@ func (pmm *pdMemberManager) syncTidbClusterStatus(tc *v1alpha1.TidbCluster, set 
 	tc.Status.PD.Members = pdStatus
 	tc.Status.PD.Leader = tc.Status.PD.Members[leader.GetName()]
 
+	// k8s check
+	podSelector, podSelectErr := metav1.LabelSelectorAsSelector(set.Spec.Selector)
+	if podSelectErr != nil {
+		return podSelectErr
+	}
+	pods, podErr := pmm.podLister.Pods(ns).List(podSelector)
+	if podErr != nil {
+		return podErr
+	}
+	for _, pod := range pods {
+		var joined = false
+		for podName, _ := range pdStatus {
+			if strings.EqualFold(pod.Name, podName) {
+				joined = true
+			}
+		}
+		if !joined {
+			if tc.Status.PD.FailureMembers == nil {
+				tc.Status.PD.FailureMembers = map[string]v1alpha1.PDFailureMember{}
+			}
+			ordinal, err := util.GetOrdinalFromPodName(pod.Name)
+			if err != nil {
+				return err
+			}
+			pvcName := ordinalPVCName(v1alpha1.PDMemberType, controller.PDMemberName(tcName), ordinal)
+			pvc, err := pmm.pvcLister.PersistentVolumeClaims(ns).Get(pvcName)
+			if err != nil {
+				return err
+			}
+			tc.Status.PD.FailureMembers[pod.Name] = v1alpha1.PDFailureMember{
+				PodName:       pod.Name,
+				MemberID:      "",
+				PVCUID:        pvc.UID,
+				MemberDeleted: false,
+				CreatedAt:     metav1.Now(),
+			}
+		}
+	}
+
 	return nil
 }
 
